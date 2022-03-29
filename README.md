@@ -1,6 +1,6 @@
 # Dependency Finder for Salesforce
 
-Node JS tool that scans the /force-app/main/default folder containing classes, lwc, aura, triggers and opens the browser with a page displaying the dependency graph between these elements.
+Node JS tool that scans the /force-app/main/default folder containing classes, lwc, aura, triggers then creates an HTML page containing the dependency graph between these elements (a new tab in the browser is automatically opened to display it).
 
 ## USAGE:
 
