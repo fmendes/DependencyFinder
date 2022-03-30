@@ -23,7 +23,6 @@
             return projectFolder + '/default';
         }
 
-        console.log( 'Error:  Choose a folder containing project files.' );
         return null;
     }
 
@@ -68,6 +67,7 @@
         hasJS = true;
         getComponentName( aName ) {
             let componentName = aName;
+            // NOTE:  didn't want to subclass JSItemType further to get rid of these ifs
             if( this.type === LWCType ) {
                 // convert camelCase to kebab-case
                 componentName = 'c-' + aName.replace( /([A-Z])/g, (g) => `-${g[0].toLowerCase()}` );
@@ -112,16 +112,16 @@
                 fileList = fs.readdirSync( path );
             }
             fileList = ( fileList ? fileList : [] );
+
             // include VF components too
-            if( this.type == PAGEType ) {
-                let componentPath = `${projectFolder}/components`;
-                let componentFileList;
-                console.log( `Looking for /components in folder:  ${projectFolder}` );
-                if( fs.existsSync( componentPath ) ) {
-                    componentFileList = fs.readdirSync( componentPath );
-                    fileList.push( ...componentFileList );
-                }
+            let componentPath = `${projectFolder}/components`;
+            let componentFileList;
+            console.log( `Looking for /components in folder:  ${projectFolder}` );
+            if( fs.existsSync( componentPath ) ) {
+                componentFileList = fs.readdirSync( componentPath );
+                fileList.push( ...componentFileList );
             }
+
             if( !fileList ) {
                 return null;
             }
@@ -161,18 +161,21 @@
         constructor( aName, anItemType, filePath ) {
             this.name = aName;
             this.itemType = anItemType;
+            // this is for when a class and another item have the same name
             this.uniqueName = `${aName}-${anItemType.type}`;
             this.filePath = filePath;
             this.references = [];
             this.referencedCount = 0;
             this.methodReferencesSet = new Set();
-            this.publicName = this.name +' '+ anItemType.type;
             this.additionalInfo = '';
+            // this is to display the item in the graph
+            this.displayName = `${aName} ${anItemType.type}`;
+            // componentName is really a "expression to look for when checking if this item is referenced"
             this.componentName = anItemType.getComponentName( aName );
         }
         getItemTextFromFile = () => {
             // read file
-            let itemText = this.getFile( this.filePath );
+            let itemText = this.getFile();
             
             // JS items have an additional .js file
             let itemTextJS = '';
@@ -195,14 +198,14 @@
             return itemText
                 +'////\n'+ itemTextJS;
         }
-        getFile = ( filePath ) => {
-            if( fs.existsSync( filePath ) ) {
-                if( verboseFlag ) {
-                    console.log( `Reading ${this.itemType.type}:  ${this.name} at ${filePath}` );
-                }
-                return fs.readFileSync( filePath, 'utf8' );
+        getFile = () => {
+            if( ! fs.existsSync( this.filePath ) ) {
+                return '';
             }
-            return '';
+            if( verboseFlag ) {
+                console.log( `Reading ${this.itemType.type}:  ${this.name} at ${this.filePath}` );
+            }
+            return fs.readFileSync( this.filePath, 'utf8' );
         }
         getReferenceSet = ( theText, className ) => {
             // detect method calls:  className.methodName(
@@ -216,6 +219,7 @@
             const reImport = /import .*? from '@salesforce\/apex\//i;
             if( foundReferences ) {
                 foundReferences.forEach( aMatch => {
+                    // TODO:  improve this, move to subclasses
                     methodReferenceSet.add( aMatch.replace( className + '.', '' )
                         .replace( '(', '' )
                         .replace( reNew, 'instantiation' )
@@ -230,7 +234,7 @@
         }
         getFormattedMethodReferenceStringList = () => {
             if( !this.methodReferencesSet || this.methodReferencesSet.size === 0 ) {
-                return `(${this.publicName})`;
+                return `(${this.displayName})`;
             }
     
             // concatenate method list with line breaks
@@ -238,7 +242,7 @@
                 ( prev, next ) => prev + '<br>' + next, ''
             );
 
-            return `(${this.publicName}<br>${methodReferencesText})`;
+            return `(${this.displayName}<br>${methodReferencesText})`;
         }
     }
 
@@ -247,14 +251,15 @@
 // skip first 2 elements:  node and path
 const myArgs = process.argv.slice( 2 );
 
-// set proper folder location
+// set proper folder location according to first parameter
 let projectFolder = myArgs[ 0 ];
-let mainProjectFolder = projectFolder;
 projectFolder = getAdjustedProjectFolder( projectFolder );
-if( projectFolder == null ) {
+if( !projectFolder ) {
+    console.log( 'Error:  Specify a folder containing project files.' );
     return;
 }
 
+// determine which parameter flags were passed
 let lowerCaseArgs = myArgs.map( param => param.toLowerCase() );
 let triggerFlag = lowerCaseArgs.includes( '--trigger' );
 let lwcFlag = lowerCaseArgs.includes( '--lwc' );
@@ -265,9 +270,10 @@ let classFlag = !triggerFlag && !lwcFlag && !auraFlag && !flowFlag && !vfpageFla
 
 let verboseFlag = myArgs.includes( '--verbose' );
 
+// this is the basis of the dependency graph
 let crossReferenceMap = new Map();
 
-// collect file paths for each of the item types
+// collect file paths for each of the item types and collect references in each file
 itemTypeMap.forEach( ( itemType ) => {
     let itemListForType = itemType.getItemList( projectFolder );
     if( itemListForType == null ) {
@@ -275,7 +281,7 @@ itemTypeMap.forEach( ( itemType ) => {
     }
 
     // store list of files per each type
-    itemType.itemsList = [ ...itemListForType ];
+    itemType.itemsList = itemListForType;
 
     // check the contents of each item/file
     itemType.itemsList.forEach( currentItem => {
@@ -288,10 +294,11 @@ itemTypeMap.forEach( ( itemType ) => {
             return;
         }
 
-        // identify the references the current item has to a LWC or Aura and store in map
+        // identify the references the current item has to a LWC/Aura/VF and store in map
         if( ( lwcFlag && itemType.type === LWCType ) 
                 || ( auraFlag && itemType.type === AURAType ) 
                 || ( vfpageFlag && itemType.type === PAGEType ) ) {
+
             let anItemList = itemTypeMap.get( itemType.type ).itemsList;
             anItemList.forEach( anItem => {
                 if( ! anItem || anItem.uniqueName == currentItem.uniqueName
@@ -350,15 +357,15 @@ itemTypeMap.forEach( ( itemType ) => {
     } );
 } );
 
-// sort map of classes by their referenced count (descending) + count of references to other classes
+// sort by descending order the classes by their referenced count + count of references to other classes
+// to hopefully make the graph more legible
 sortedClassReferenceArray = [...crossReferenceMap.values()].sort( 
         (a, b) => b.referencedCount + b.references.length - a.referencedCount - a.references.length );
 
 // list classes and their references in mermaid format inside HTML
 console.log( "Composing dependency graph..." );
-let graphDefinition = 'graph LR\n';
+let graphDefinition = '';
 let elementsWithMoreRefs = [];
-let triggerList = [];
 let independentItemList = [];
 let listByType = new Map();
 sortedClassReferenceArray.forEach( anItem => {
@@ -385,7 +392,7 @@ sortedClassReferenceArray.forEach( anItem => {
 
     // display items that do not have dependencies as a single shape
     if( !anItem.references || anItem.references.length == 0 ) {
-        independentItemList.push( `${anItem.publicName}` );
+        independentItemList.push( `${anItem.displayName}` );
         // return; // removed because it makes some items not colored
     }
 
@@ -401,7 +408,7 @@ sortedClassReferenceArray.forEach( anItem => {
         listByType.set( anItem.itemType.type, list );
     }
 
-    // prepare text for Mermaid output (dependency graph)
+    // prepare Mermaid output for dependencies
     anItem.references.forEach( aReference => {
         // TODO:  fix this:  if this reference is added with the methodList initially 
         // and added again as referencer (hence without the methodList), 
@@ -410,9 +417,13 @@ sortedClassReferenceArray.forEach( anItem => {
 
         // add class dependency to the graph in Mermaid notation
         let methodList = aReference.getFormattedMethodReferenceStringList();
+
+        // TODO:  come up with a way to make the arrows display the methods they reference
+
+        // TODO:  come up with a way to display tooltips
         
         // encode flow from a dependant item to a referenced item
-        let dependencyFlow = `${anItem.uniqueName}(${anItem.publicName}) --> ${aReference.uniqueName}${methodList}\n`;
+        let dependencyFlow = `${anItem.uniqueName}(${anItem.displayName}) --> ${aReference.uniqueName}${methodList}\n`;
         graphDefinition += dependencyFlow;
 
         // if( verboseFlag ) {
@@ -422,11 +433,15 @@ sortedClassReferenceArray.forEach( anItem => {
 
     // prepare Mermaid output for items that don't have dependencies but are referenced by other items
     if( anItem.references.length == 0 && anItem.referencedCount > 0 ) {
-        let dependencyFlow = `${anItem.uniqueName}(${anItem.publicName})\n`;
+        let dependencyFlow = `${anItem.uniqueName}(${anItem.displayName})\n`;
         graphDefinition += dependencyFlow;
     }
 } );
 
+if( graphDefinition === '' ) {
+    console.log( 'No cross-references found for the specified parameters.' );
+    return;
+}
 
 // add CSS class to elements with more references
 let styleSheetList = '';
@@ -456,23 +471,24 @@ let theHeader = ( triggerFlag ? 'Triggers ' : '' )
                 + ( vfpageFlag ? 'Visualforce Pages ' : '' )
             + 'Dependency Graph for ' + fullPath;
 
-let graphHTML = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-            + `</head><body><h2>${theHeader}</h2><div id="theGraph" class="mermaid">\n`
-            + graphDefinition
-            + independentItemElement
-            + styleSheetList
-            +'</div><script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>'
-            + '<script>mermaid.initialize({startOnLoad:true,securityLevel:\'loose\'}); '
-            + 'setTimeout( () => { var theGraph = document.querySelector("#theGraph SVG"); '
-            + 'theGraph.setAttribute("height","100%"); }, 1000 );</script></body></html>';
+// build page with everything and script to adjust height of graph
+let graphHTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+            </head><body><h2>${theHeader}</h2><div id="theGraph" class="mermaid">\ngraph LR\n
+            ${graphDefinition}
+            ${independentItemElement}
+            ${styleSheetList}
+            </div><script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+            <script>mermaid.initialize({startOnLoad:true,securityLevel:\'loose\'}); 
+            setTimeout( () => { var theGraph = document.querySelector("#theGraph SVG"); 
+            theGraph.setAttribute("height","100%"); }, 1000 );</script></body></html>`;
 
 // save HTML page with dependency graph
-fs.writeFileSync( './dependencyGraph.html', graphHTML );
-console.log( 'File dependencyGraph.html written successfully' );
+fs.writeFileSync( `${fullPath}/dependencyGraph.html`, graphHTML );
+console.log( `File dependencyGraph.html written successfully on ${fullPath}` );
 
 // open browser with dependency graph
 const open = require('open');
 (async () => {
-    await open( './dependencyGraph.html' , {wait: false} );
+    await open( `${fullPath}/dependencyGraph.html`, {wait: false} );
     console.log( 'The dependency graph should now display on the browser (scroll down if needed)' );
 }) ();
