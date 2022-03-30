@@ -16,9 +16,13 @@ to show lwc vs class dependencies
 
     node ./dependencyGraph.js myProjectFolder --lwc
 
-(NOT YET IMPLEMENTED) to show aura components vs class dependencies
+to show aura components vs class dependencies
 
     node ./dependencyGraph.js myProjectFolder --aura
+
+to show Visualforce pages/components vs class dependencies
+
+    node ./dependencyGraph.js myProjectFolder --vf
 
 (NOT YET IMPLEMENTED) to show flow vs class dependencies
 
