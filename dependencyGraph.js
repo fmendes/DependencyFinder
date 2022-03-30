@@ -119,8 +119,8 @@
                 console.log( `Looking for /components in folder:  ${projectFolder}` );
                 if( fs.existsSync( componentPath ) ) {
                     componentFileList = fs.readdirSync( componentPath );
+                    fileList.push( ...componentFileList );
                 }
-                fileList.push( ...componentFileList );
             }
             if( !fileList ) {
                 return null;
@@ -305,6 +305,8 @@ itemTypeMap.forEach( ( itemType ) => {
                 // store referenced class in xref map
                 crossReferenceMap.set( anItem.name, anItem );
 
+                // TODO:  store the interface of the item (public methods/attributes) and what sObjects it references
+
                 // add lwc to the references list of the outer item
                 currentItem.references.push( anItem );
             } );
@@ -320,8 +322,7 @@ itemTypeMap.forEach( ( itemType ) => {
 
             // detect and collect method calls in a set
             let methodReferencesSet = currentItem.getReferenceSet( itemText, innerclass.name );
-            //console.log( `methodReferencesSet for ${innerclass.name}`, methodReferencesSet );
-
+            // commented out because not all method references are detected
             // if( methodReferencesSet.size == 0 ) {
             //     return;
             // }
@@ -330,7 +331,8 @@ itemTypeMap.forEach( ( itemType ) => {
             if( methodReferencesSet.size > 0 ) {
                 innerclass.methodReferencesSet.add( ...methodReferencesSet );
             }
-            //console.log( `added methodReferencesSet for ${innerclass.name}`, innerclass.methodReferencesSet );
+
+            // TODO:  store the interface of the item (public methods/attributes) and what sObjects it references
 
             // increase referenced count
             innerclass.referencedCount++;
