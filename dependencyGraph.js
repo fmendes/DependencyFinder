@@ -8,6 +8,9 @@
     var fs = require('fs');
 
     var getAdjustedProjectFolder = ( projectFolder ) => {
+        const path = require( 'path' );
+        projectFolder = path.resolve( projectFolder );
+
         if( ! projectFolder.includes( 'force-app' ) ) {
             return projectFolder + '/force-app/main/default';
         }
@@ -33,19 +36,24 @@
             this.referenceRegex = referenceRegex;
             this.color = color;
         }
+        getComponentName( aName ) {
+            //let componentName = `${aName}.`;
+            return aName;
+        }
         getItemList = ( projectFolder ) => {
             // collect items in folder
             console.log( `Looking for /${this.folder} in folder:  ${projectFolder}` );
             let path = `${projectFolder}/${this.folder}`;
             let fileList;
-            try {
+            if( fs.existsSync( path ) ) {
                 fileList = fs.readdirSync( path );
-            } catch( e ) {
-                console.log( `Error:  Could not read folder ${path}` );
+            } else {
                 return null;
             }
-            fileList = fileList.filter( fileName => fileName.endsWith( this.extension ) 
-                                        && ! fileName.toLowerCase().includes( 'test' ) );
+            
+            fileList = fileList.filter( fileName => ! fileName.startsWith( '.' )
+                                        && ! fileName.toLowerCase().includes( 'test' ) 
+                                        && fileName.endsWith( this.extension ) );
     
             let itemList = fileList.map( fileName => { 
                 return new ItemData( fileName.substring( 0, fileName.length - this.extension.length )
@@ -58,22 +66,33 @@
     }
     class JSItemType extends ItemType {
         hasJS = true;
+        getComponentName( aName ) {
+            let componentName = aName;
+            if( this.type === LWCType ) {
+                // convert camelCase to kebab-case
+                componentName = 'c-' + aName.replace( /([A-Z])/g, (g) => `-${g[0].toLowerCase()}` );
+            }
+            if( this.type === AURAType ) {
+                componentName = `c:${aName} `;
+            }
+            return componentName;
+        }
         getItemList = ( projectFolder ) => {
             // collect items in folder
             console.log( `Looking for /${this.folder} in folder:  ${projectFolder}` );
             let path = `${projectFolder}/${this.folder}`;
             let subfolderList;
-            try {
+
+            if( fs.existsSync( path ) ) {
                 subfolderList = fs.readdirSync( path );
-            } catch( e ) {
-                console.log( `Error:  Could not read folder ${path}` );
+            } else {
                 return null;
             }
     
             // JS items are in subfolders
             let itemList = subfolderList.map( subfolder => { 
-                if( subfolder.includes( '.json' ) ) {
-                    return;
+                if( subfolder.includes( '.json' ) || subfolder.startsWith( '.' ) ) {
+                    return null;
                 }
                 return new ItemData( subfolder
                                 , this
@@ -83,56 +102,107 @@
             return itemList;
         }
     }
+    class VFItemType extends ItemType {
+        getItemList = ( projectFolder ) => {
+            // collect items in folder
+            console.log( `Looking for /${this.folder} in folder:  ${projectFolder}` );
+            let path = `${projectFolder}/${this.folder}`;
+            let fileList;
+            if( fs.existsSync( path ) ) {
+                fileList = fs.readdirSync( path );
+            }
+            fileList = ( fileList ? fileList : [] );
+            // include VF components too
+            if( this.type == PAGEType ) {
+                let componentPath = `${projectFolder}/components`;
+                let componentFileList;
+                console.log( `Looking for /components in folder:  ${projectFolder}` );
+                if( fs.existsSync( componentPath ) ) {
+                    componentFileList = fs.readdirSync( componentPath );
+                }
+                fileList.push( ...componentFileList );
+            }
+            if( !fileList ) {
+                return null;
+            }
+            
+            fileList = fileList.filter( fileName => ! fileName.startsWith( '.' )
+                                        && ! fileName.toLowerCase().includes( 'test' ) 
+                                        && ( fileName.endsWith( this.extension ) 
+                                            || fileName.endsWith( '.component' ) ) );
+    
+            let itemList = fileList.map( fileName => {
+                let itemName = fileName.substring( 0, fileName.length - this.extension.length );
+                let filePath = `${path}/${fileName}`;
+                // handle VF components
+                if( fileName.endsWith( '.component' ) ) {
+                    itemName = fileName.substring( 0, fileName.length - '.component'.length );
+                    filePath = `${projectFolder}/components/${fileName}`;
+                }
+                return new ItemData( itemName, this, filePath );
+            } );
+    
+            return itemList;
+        }
+    }
 
     const CLASSType = 'CLASS', TRIGGERType = 'TRIGGER', AURAType = 'AURA', LWCType = 'LWC'
-        , FLOWType = 'FLOW', WORKFLOWType = 'WORKFLOW'; // PROCESSBUILDERType = 'PBFLOW?'
+        , FLOWType = 'FLOW', WORKFLOWType = 'WORKFLOW', PAGEType = 'VISUALFORCE'; // PROCESSBUILDERType = 'PBFLOW?'
     const itemTypeMap = new Map();
     itemTypeMap.set( CLASSType, new ItemType( CLASSType, 'classes', '.cls', '${className}\\.([^ <>\\.]*?)\\(', 'lightblue' ) );
     itemTypeMap.set( TRIGGERType, new ItemType( TRIGGERType, 'triggers', '.trigger', 'new ${className}\\(', 'cyan' ) );
-    itemTypeMap.set( AURAType, new JSItemType( AURAType, 'aura', '.cmp', null, 'yellow' ) );
+    itemTypeMap.set( AURAType, new JSItemType( AURAType, 'aura', '.cmp', 'controller="${className}"', 'yellow' ) );
     itemTypeMap.set( LWCType, new JSItemType( LWCType, 'lwc', '.html'
                     , 'import .*? from \'@salesforce/apex/${className}.(.*?)\';', 'lightgreen' ) );
+    itemTypeMap.set( PAGEType, new VFItemType( PAGEType, 'pages', '.page', 'controller="${className}"', 'plum' ) );
     itemTypeMap.set( FLOWType, new ItemType( FLOWType, 'flow', '.flow', null, 'pink' ) );  // ?
 
     class ItemData {
         constructor( aName, anItemType, filePath ) {
             this.name = aName;
             this.itemType = anItemType;
+            this.uniqueName = `${aName}-${anItemType.type}`;
             this.filePath = filePath;
             this.references = [];
             this.referencedCount = 0;
             this.methodReferencesSet = new Set();
             this.publicName = this.name +' '+ anItemType.type;
             this.additionalInfo = '';
-            this.componentName = 'c-' + aName.replace( /([A-Z])/g, (g) => `-${g[0].toLowerCase()}` );
+            this.componentName = anItemType.getComponentName( aName );
         }
-        getItemText = () => {
+        getItemTextFromFile = () => {
             // read file
-            let itemText = '';
-            try {
-                if( verboseFlag ) {
-                    console.log( `Reading ${this.itemType.type}:  ${this.name} at ${this.filePath}` );
-                }
-                itemText = fs.readFileSync( this.filePath, 'utf8' );
-            } catch( e ) {
-                console.log( `Error:  Could not read file ${this.filePath}` );
-                return;
-            }
+            let itemText = this.getFile( this.filePath );
+            
             // JS items have an additional .js file
             let itemTextJS = '';
-            let filePathJS = this.filePath.replace( this.itemType.extension, '.js' );
             if( this.itemType.hasJS ) {
-                try {
-                    if( verboseFlag ) {
-                        console.log( `Reading ${this.itemType.type}:  ${this.name} at ${filePathJS}` );
-                    }
-                    itemTextJS = fs.readFileSync( filePathJS, 'utf8' );
-                } catch( e ) {
-                    console.log( `Error:  Could not read file ${filePathJS}` );
-                    return;
-                }
+                let filePathJS = this.filePath.replace( this.itemType.extension, '.js' );
+                itemTextJS = this.getFile( filePathJS );
+
+                // try again finding a controller
+                filePathJS = this.filePath.replace( this.itemType.extension, 'Controller.js' );
+                let itemTextControllerJS = this.getFile( filePathJS );
+
+                // try again finding a helper
+                filePathJS = this.filePath.replace( this.itemType.extension, 'Helper.js' );
+                let itemTextHelperJS = this.getFile( filePathJS );
+
+                itemTextJS = itemTextJS
+                            + itemTextControllerJS
+                            + itemTextHelperJS;
             }
-            return itemText +'////\n'+ itemTextJS;
+            return itemText
+                +'////\n'+ itemTextJS;
+        }
+        getFile = ( filePath ) => {
+            if( fs.existsSync( filePath ) ) {
+                if( verboseFlag ) {
+                    console.log( `Reading ${this.itemType.type}:  ${this.name} at ${filePath}` );
+                }
+                return fs.readFileSync( filePath, 'utf8' );
+            }
+            return '';
         }
         getReferenceSet = ( theText, className ) => {
             // detect method calls:  className.methodName(
@@ -150,7 +220,9 @@
                         .replace( '(', '' )
                         .replace( reNew, 'instantiation' )
                         .replace( reImport, '' )
-                        .replace( '\';', '' ) );
+                        .replace( '\';', '' )
+                        .replace( 'controller="', '' )
+                        .replace( '"', '' ) );
                 } );
             }
     
@@ -158,29 +230,16 @@
         }
         getFormattedMethodReferenceStringList = () => {
             if( !this.methodReferencesSet || this.methodReferencesSet.size === 0 ) {
-                return '';
+                return `(${this.publicName})`;
             }
     
             // concatenate method list with line breaks
             let methodReferencesText = [...this.methodReferencesSet].reduce( 
                 ( prev, next ) => prev + '<br>' + next, ''
             );
-    
+
             return `(${this.publicName}<br>${methodReferencesText})`;
         }
-    }
-
-    var getFormattedMethodReferenceStringList = ( aReference ) => {
-        if( !aReference.methodReferencesSet || aReference.methodReferencesSet.size === 0 ) {
-            return '';
-        }
-
-        // concatenate method list with line breaks
-        let methodReferencesText = [...aReference.methodReferencesSet].reduce( 
-            ( prev, next ) => prev + '<br>' + next, ''
-        );
-
-        return `(${aReference.publicName}<br>${methodReferencesText})`;
     }
 
 // MAIN
@@ -190,16 +249,19 @@ const myArgs = process.argv.slice( 2 );
 
 // set proper folder location
 let projectFolder = myArgs[ 0 ];
+let mainProjectFolder = projectFolder;
 projectFolder = getAdjustedProjectFolder( projectFolder );
 if( projectFolder == null ) {
     return;
 }
 
-let triggerFlag = myArgs.includes( '--trigger' ) || myArgs.includes( '--triggers' );
-let lwcFlag = myArgs.includes( '--lwc' ) || myArgs.includes( '--LWC' );
-let auraFlag = myArgs.includes( '--aura' ) || myArgs.includes( '--AURA' );
-let flowFlag = myArgs.includes( '--flow' ) || myArgs.includes( '--FLOW' );
-let classFlag = !triggerFlag && !lwcFlag && !auraFlag && !flowFlag;
+let lowerCaseArgs = myArgs.map( param => param.toLowerCase() );
+let triggerFlag = lowerCaseArgs.includes( '--trigger' );
+let lwcFlag = lowerCaseArgs.includes( '--lwc' );
+let auraFlag = lowerCaseArgs.includes( '--aura' );
+let flowFlag = lowerCaseArgs.includes( '--flow' );
+let vfpageFlag = lowerCaseArgs.includes( '--visualforce' ) || lowerCaseArgs.includes( '--vf' );
+let classFlag = !triggerFlag && !lwcFlag && !auraFlag && !flowFlag && !vfpageFlag;
 
 let verboseFlag = myArgs.includes( '--verbose' );
 
@@ -208,7 +270,6 @@ let crossReferenceMap = new Map();
 // collect file paths for each of the item types
 itemTypeMap.forEach( ( itemType ) => {
     let itemListForType = itemType.getItemList( projectFolder );
-    //console.log( itemListForType );
     if( itemListForType == null ) {
         return;
     }
@@ -216,54 +277,54 @@ itemTypeMap.forEach( ( itemType ) => {
     // store list of files per each type
     itemType.itemsList = [ ...itemListForType ];
 
-    // check the contents of each file
-    itemType.itemsList.forEach( anItem => {
-        if( ! anItem ) {
+    // check the contents of each item/file
+    itemType.itemsList.forEach( currentItem => {
+        if( ! currentItem ) {
             return;
         }
 
-        let itemText = anItem.getItemText();
+        let itemText = currentItem.getItemTextFromFile();
+        if( ! itemText ) {
+            return;
+        }
 
-        // find all references from one LWC to another and store in map
-        if( lwcFlag && itemType.type === LWCType ) {
-            let lwcItemList = itemTypeMap.get( LWCType ).itemsList;
-            lwcItemList.forEach( lwcItem => {
-                if( ! lwcItem ) {
+        // identify the references the current item has to a LWC or Aura and store in map
+        if( ( lwcFlag && itemType.type === LWCType ) 
+                || ( auraFlag && itemType.type === AURAType ) 
+                || ( vfpageFlag && itemType.type === PAGEType ) ) {
+            let anItemList = itemTypeMap.get( itemType.type ).itemsList;
+            anItemList.forEach( anItem => {
+                if( ! anItem || anItem.uniqueName == currentItem.uniqueName
+                        || ! itemText.includes( anItem.componentName ) ) {
                     return;
                 }
-                if( ! itemText || lwcItem.name == anItem.name 
-                            || ! itemText.includes( lwcItem.componentName ) ) {
-                    return;
-                }
-
-                // add lwc to the references list of the outer item
-                anItem.references.push( lwcItem );
 
                 // increase referenced count
-                lwcItem.referencedCount++;
+                anItem.referencedCount++;
                 
                 // store referenced class in xref map
-                crossReferenceMap.set( lwcItem.name, lwcItem );
+                crossReferenceMap.set( anItem.name, anItem );
+
+                // add lwc to the references list of the outer item
+                currentItem.references.push( anItem );
             } );
         }
 
-        // find all references to classes and store in map
+        // identify the references the current item has to a class and store in map
         let classItemList = itemTypeMap.get( CLASSType ).itemsList;
         classItemList.forEach( innerclass => {
-            if( ! itemText || innerclass.name == anItem.name 
-                        || ! itemText.includes( innerclass.name ) ) {
+            if( innerclass.uniqueName == currentItem.uniqueName
+                    || ! itemText.includes( innerclass.componentName ) ) {
                 return;
             }
 
             // detect and collect method calls in a set
-            let methodReferencesSet = anItem.getReferenceSet( itemText, innerclass.name );
+            let methodReferencesSet = currentItem.getReferenceSet( itemText, innerclass.name );
             //console.log( `methodReferencesSet for ${innerclass.name}`, methodReferencesSet );
 
-            // add class to the references list of the outer item
-            anItem.references.push( innerclass );
-
-            // increase referenced count
-            innerclass.referencedCount++;
+            // if( methodReferencesSet.size == 0 ) {
+            //     return;
+            // }
 
             // add method to inner class record without duplicates
             if( methodReferencesSet.size > 0 ) {
@@ -271,12 +332,18 @@ itemTypeMap.forEach( ( itemType ) => {
             }
             //console.log( `added methodReferencesSet for ${innerclass.name}`, innerclass.methodReferencesSet );
 
+            // increase referenced count
+            innerclass.referencedCount++;
+
             // store referenced class in xref map
             crossReferenceMap.set( innerclass.name, innerclass );
+
+            // add class to the references list of the outer item
+            currentItem.references.push( innerclass );
         } );
 
         // store item in xref map
-        crossReferenceMap.set( anItem.name, anItem );
+        crossReferenceMap.set( currentItem.name, currentItem );
 
     } );
 } );
@@ -286,7 +353,7 @@ sortedClassReferenceArray = [...crossReferenceMap.values()].sort(
         (a, b) => b.referencedCount + b.references.length - a.referencedCount - a.references.length );
 
 // list classes and their references in mermaid format inside HTML
-console.log( "Composing dependency graph:" );
+console.log( "Composing dependency graph..." );
 let graphDefinition = 'graph LR\n';
 let elementsWithMoreRefs = [];
 let triggerList = [];
@@ -294,6 +361,7 @@ let independentItemList = [];
 let listByType = new Map();
 sortedClassReferenceArray.forEach( anItem => {
 
+    // skip elements that were not specified in the command line
     if( classFlag && anItem.itemType.type != CLASSType ) {
         return;
     }
@@ -309,39 +377,52 @@ sortedClassReferenceArray.forEach( anItem => {
     if( flowFlag && anItem.itemType.type != FLOWType ) {
         return;
     }
+    if( vfpageFlag && anItem.itemType.type != PAGEType ) {
+        return;
+    }
 
     // display items that do not have dependencies as a single shape
     if( !anItem.references || anItem.references.length == 0 ) {
         independentItemList.push( `${anItem.publicName}` );
-        return;
+        // return; // removed because it makes some items not colored
     }
 
     // highlight in orange items that dependend on 6+ other items
     if( anItem.references.length >= 6 ) {
-        elementsWithMoreRefs.push( anItem.name );
+        elementsWithMoreRefs.push( anItem.uniqueName );
 
     } else {
-        // add class to list segregated by type
+        // add class to list segregated by type for the purpose of coloring
         let list = listByType.get( anItem.itemType.type );
-        if( !list ) {
-            list = [];
-        }
-        list.push( anItem.name );
+        list = ( list ? list : [] );
+        list.push( anItem.uniqueName );
         listByType.set( anItem.itemType.type, list );
     }
 
     // prepare text for Mermaid output (dependency graph)
     anItem.references.forEach( aReference => {
+        // TODO:  fix this:  if this reference is added with the methodList initially 
+        // and added again as referencer (hence without the methodList), 
+        // the methodList on the first instance is omitted from the graph
+        // potential solution:  add it again with the methodList at the end
+
         // add class dependency to the graph in Mermaid notation
-        let methodList = aReference.getFormattedMethodReferenceStringList();// aReference );
+        let methodList = aReference.getFormattedMethodReferenceStringList();
         
-        let dependencyFlow = `${anItem.name}(${anItem.publicName}) --> ${aReference.name}${methodList}\n`;
+        // encode flow from a dependant item to a referenced item
+        let dependencyFlow = `${anItem.uniqueName}(${anItem.publicName}) --> ${aReference.uniqueName}${methodList}\n`;
         graphDefinition += dependencyFlow;
 
         // if( verboseFlag ) {
         //     console.log( `graphDefinition with dependencies:`, dependencyFlow );
         // }
     } );
+
+    // prepare Mermaid output for items that don't have dependencies but are referenced by other items
+    if( anItem.references.length == 0 && anItem.referencedCount > 0 ) {
+        let dependencyFlow = `${anItem.uniqueName}(${anItem.publicName})\n`;
+        graphDefinition += dependencyFlow;
+    }
 } );
 
 
@@ -361,8 +442,20 @@ listByType.forEach( ( aListItem, itemType ) => {
 let independentItemElement = ( independentItemList.length === 0 ? '' :
                     'independentItems(ITEMS WITH NO DEPENDENCIES:<br><br>' + independentItemList.join( '<br>' ) + ')\n' );
 
+let fullPath = projectFolder.replace( '/force-app', '' )
+                            .replace( '/main', '' )
+                            .replace( '/default', '' );
+
+let theHeader = ( triggerFlag ? 'Triggers ' : '' )
+                + ( lwcFlag ? 'LWCs ' : '' )
+                + ( auraFlag ? 'Aura Components ' : '' )
+                + ( flowFlag ? 'Flows ' : '' )
+                + ( classFlag ? 'Apex Classes ' : '' )
+                + ( vfpageFlag ? 'Visualforce Pages ' : '' )
+            + 'Dependency Graph for ' + fullPath;
+
 let graphHTML = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-            + '</head><body><div id="theGraph" class="mermaid">\n'
+            + `</head><body><h2>${theHeader}</h2><div id="theGraph" class="mermaid">\n`
             + graphDefinition
             + independentItemElement
             + styleSheetList
@@ -373,7 +466,7 @@ let graphHTML = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
 
 // save HTML page with dependency graph
 fs.writeFileSync( './dependencyGraph.html', graphHTML );
-console.log( 'dependencyGraph.html written successfully' );
+console.log( 'File dependencyGraph.html written successfully' );
 
 // open browser with dependency graph
 const open = require('open');
