@@ -28,31 +28,34 @@
 
     class ItemType {
         hasJS = false;
-        constructor( type, folder, extension, referenceRegex, color ) {
+        constructor( type, folder, extension, color ) {
             this.type = type;
             this.folder = folder;
             this.extension = extension;
-            this.referenceRegex = referenceRegex;
             this.color = color;
         }
         getComponentName( aName ) {
-            //let componentName = `${aName}.`;
             return aName;
+        }
+        validateFileName( fileName ) {
+            return ! fileName.startsWith( '.' )
+                    && ! fileName.toLowerCase().includes( 'test' ) 
+                    && fileName.endsWith( this.extension );
+        }
+        readDirIfItExists( dirPath ) {
+            let fileList;
+            if( fs.existsSync( dirPath ) ) {
+                fileList = fs.readdirSync( dirPath );
+            }
+            return ( fileList ? fileList : [] );
         }
         getItemList = ( projectFolder ) => {
             // collect items in folder
             console.log( `Looking for /${this.folder} in folder:  ${projectFolder}` );
             let path = `${projectFolder}/${this.folder}`;
-            let fileList;
-            if( fs.existsSync( path ) ) {
-                fileList = fs.readdirSync( path );
-            } else {
-                return null;
-            }
+            let fileList = this.readDirIfItExists( path );
             
-            fileList = fileList.filter( fileName => ! fileName.startsWith( '.' )
-                                        && ! fileName.toLowerCase().includes( 'test' ) 
-                                        && fileName.endsWith( this.extension ) );
+            fileList = fileList.filter( fileName => this.validateFileName( fileName ) );
     
             let itemList = fileList.map( fileName => { 
                 return new ItemData( fileName.substring( 0, fileName.length - this.extension.length )
@@ -61,6 +64,48 @@
             } );
     
             return itemList;
+        }
+        findReference( theText, itemName ) {
+            // finds references to a class within another class:  new className() or className.methodName()
+            const instantiationExpression = `new ${itemName}\\(`;
+            let reMatchReferences = new RegExp( instantiationExpression, 'g' );
+            let foundClassInstantiation = theText.match( reMatchReferences );
+
+            reMatchReferences = new RegExp( `${itemName}\\.[^ <>]*?\\(`, 'g' );
+            let foundStaticMethodCall = theText.match( reMatchReferences );
+
+            // finds references to a flow within a class:  Flow.Interview.flowName
+            const flowRefExpression = `Flow.Interview.${itemName}`;
+            reMatchReferences = new RegExp( flowRefExpression, 'g' );
+            let foundFlowReference = theText.match( reMatchReferences );
+
+            let foundReferences = foundClassInstantiation ? foundClassInstantiation : [];
+            foundReferences = foundReferences.concat( foundStaticMethodCall ? foundStaticMethodCall : [] );
+            foundReferences = foundReferences.concat( foundFlowReference ? foundFlowReference : [] );
+
+            // clean up the references
+            foundReferences = foundReferences.map( ( aReference ) => {
+                return aReference.replace( `${itemName}.`, '' ).replace( '(', '' ).replace( /\..*/gi, '' )
+                                            .replace( instantiationExpression, 'instantiation' )
+                                            .replace( `new ${itemName}`, 'instantiation' )
+                                            .replace( flowRefExpression, 'flow' );
+            } );
+            //console.log( `Found ${foundReferences.length} references to ${itemName}`, foundReferences );
+            return foundReferences;
+        }
+        fetchItemsFromFolder() {
+            if( this.itemsList ) {
+                return this.itemsList;
+            }
+            let itemListForType = this.getItemList( projectFolder );
+            if( itemListForType == null ) {
+                return;
+            }
+
+            // store list of files per each type
+            this.itemsList = itemListForType;
+
+            return this.itemsList;
         }
     }
     class JSItemType extends ItemType {
@@ -81,11 +126,9 @@
             // collect items in folder
             console.log( `Looking for /${this.folder} in folder:  ${projectFolder}` );
             let path = `${projectFolder}/${this.folder}`;
-            let subfolderList;
 
-            if( fs.existsSync( path ) ) {
-                subfolderList = fs.readdirSync( path );
-            } else {
+            let subfolderList = this.readDirIfItExists( path );
+            if( subfolderList.length === 0 ) {
                 return null;
             }
     
@@ -101,33 +144,48 @@
     
             return itemList;
         }
+        findReference( theText, itemName ) {
+            // finds references to a class within a LWC/Aura/VF:  controller="className" or import...from '@...className'
+            const controllerRefExpression = `controller="${itemName}"`;
+            let reMatchReferences = new RegExp( controllerRefExpression, 'g' );
+            let foundControllerReference = theText.match( reMatchReferences );
+
+            const importRefExpression = `import .*? from \\'@salesforce/apex/${itemName}.(.*?)\\';`;
+            reMatchReferences = new RegExp( importRefExpression, 'g' );
+            let foundLWCImport = theText.match( reMatchReferences );
+
+            let foundReferences = foundControllerReference ? foundControllerReference : [];
+            foundReferences = foundReferences.concat( foundLWCImport ? foundLWCImport : [] );
+
+            // clean up the references
+            foundReferences = foundReferences.map( ( aReference ) => {
+                return aReference.replace( controllerRefExpression, 'controller' )
+                                        .replace( importRefExpression, 'imported' );
+            } );
+            //console.log( `Found ${foundReferences.length} references to ${itemName}`, foundReferences );
+            return foundReferences;
+        }
     }
     class VFItemType extends ItemType {
         getItemList = ( projectFolder ) => {
             // collect items in folder
             console.log( `Looking for /${this.folder} in folder:  ${projectFolder}` );
             let path = `${projectFolder}/${this.folder}`;
-            let fileList;
-            if( fs.existsSync( path ) ) {
-                fileList = fs.readdirSync( path );
-            }
-            fileList = ( fileList ? fileList : [] );
+            let fileList = this.readDirIfItExists( path );
 
             // include VF components too
-            let componentPath = `${projectFolder}/components`;
-            let componentFileList;
             console.log( `Looking for /components in folder:  ${projectFolder}` );
-            if( fs.existsSync( componentPath ) ) {
-                componentFileList = fs.readdirSync( componentPath );
+            let componentPath = `${projectFolder}/components`;
+            let componentFileList = this.readDirIfItExists( componentPath );
+            if( componentFileList.length > 0 ) {
                 fileList.push( ...componentFileList );
             }
 
-            if( !fileList ) {
+            if( fileList.length === 0 ) {
                 return null;
             }
             
             fileList = fileList.filter( fileName => ! fileName.startsWith( '.' )
-                                        && ! fileName.toLowerCase().includes( 'test' ) 
                                         && ( fileName.endsWith( this.extension ) 
                                             || fileName.endsWith( '.component' ) ) );
     
@@ -145,17 +203,36 @@
             return itemList;
         }
     }
+    class FlowItemType extends ItemType {
+        validateFileName( fileName ) {
+            return ! fileName.startsWith( '.' )
+                && fileName.endsWith( this.extension );
+        }
+        // findReference( theText, itemName ) {
+        //     // finds references to a flow within a class:  Flow.Interview.flowName
+        //     const flowRefExpression = `Flow.Interview.${itemName}`;
+        //     let reMatchReferences = new RegExp( flowRefExpression, 'g' );
+        //     let foundFlowReference = theText.match( reMatchReferences );
+
+        //     //console.log( `Found ${foundReferences.length} references to ${itemName}`, foundReferences );
+        //     return foundFlowReference;
+        // }
+    }
+    class WorkflowItemType extends FlowItemType {
+        // TODO:  reimplement getItemList() to retrieve each object's workflows and extract from them
+        // the individual workflow items (rules, time-triggers, alerts, field updates, etc.)
+    }
 
     const CLASSType = 'CLASS', TRIGGERType = 'TRIGGER', AURAType = 'AURA', LWCType = 'LWC'
         , FLOWType = 'FLOW', WORKFLOWType = 'WORKFLOW', PAGEType = 'VISUALFORCE'; // PROCESSBUILDERType = 'PBFLOW?'
     const itemTypeMap = new Map();
-    itemTypeMap.set( CLASSType, new ItemType( CLASSType, 'classes', '.cls', '${className}\\.([^ <>\\.]*?)\\(', 'lightblue' ) );
-    itemTypeMap.set( TRIGGERType, new ItemType( TRIGGERType, 'triggers', '.trigger', 'new ${className}\\(', 'cyan' ) );
-    itemTypeMap.set( AURAType, new JSItemType( AURAType, 'aura', '.cmp', 'controller="${className}"', 'yellow' ) );
-    itemTypeMap.set( LWCType, new JSItemType( LWCType, 'lwc', '.html'
-                    , 'import .*? from \'@salesforce/apex/${className}.(.*?)\';', 'lightgreen' ) );
-    itemTypeMap.set( PAGEType, new VFItemType( PAGEType, 'pages', '.page', 'controller="${className}"', 'plum' ) );
-    itemTypeMap.set( FLOWType, new ItemType( FLOWType, 'flow', '.flow', null, 'pink' ) );  // ?
+    itemTypeMap.set( CLASSType, new ItemType( CLASSType, 'classes', '.cls', 'lightblue' ) );
+    itemTypeMap.set( TRIGGERType, new ItemType( TRIGGERType, 'triggers', '.trigger', 'cyan' ) );
+    itemTypeMap.set( AURAType, new JSItemType( AURAType, 'aura', '.cmp', 'yellow' ) );
+    itemTypeMap.set( LWCType, new JSItemType( LWCType, 'lwc', '.html', 'lightgreen' ) );
+    itemTypeMap.set( PAGEType, new VFItemType( PAGEType, 'pages', '.page', 'plum' ) );
+    itemTypeMap.set( FLOWType, new FlowItemType( FLOWType, 'flows', '.flow-meta.xml', 'pink' ) );
+    itemTypeMap.set( WORKFLOWType, new WorkflowItemType( WORKFLOWType, 'workflows', '.workflow-meta.xml', 'gray' ) );
 
     class ItemData {
         constructor( aName, anItemType, filePath ) {
@@ -208,27 +285,13 @@
             return fs.readFileSync( this.filePath, 'utf8' );
         }
         getReferenceSet = ( theText, className ) => {
-            // detect method calls:  className.methodName(
-            let regexExpression = this.itemType.referenceRegex.replace( '${className}', className );
-            //console.log( `Looking for ${regexExpression} in ${this.name}` );
-            const reMatchReferences = new RegExp( regexExpression, 'g' );
-            let foundReferences = theText.match( reMatchReferences );
+            let foundReferences = this.itemType.findReference( theText, className );
 
             let methodReferenceSet = new Set();
-            const reNew = /new .*/i;
-            const reImport = /import .*? from '@salesforce\/apex\//i;
-            if( foundReferences ) {
-                foundReferences.forEach( aMatch => {
-                    // TODO:  improve this, move to subclasses
-                    methodReferenceSet.add( aMatch.replace( className + '.', '' )
-                        .replace( '(', '' )
-                        .replace( reNew, 'instantiation' )
-                        .replace( reImport, '' )
-                        .replace( '\';', '' )
-                        .replace( 'controller="', '' )
-                        .replace( '"', '' ) );
-                } );
+            if( foundReferences && foundReferences.length > 0 ) {
+                methodReferenceSet.add( ...foundReferences );
             }
+            //console.log( 'methodReferenceSet', methodReferenceSet );
     
             return methodReferenceSet;
         }
@@ -275,16 +338,17 @@ let crossReferenceMap = new Map();
 
 // collect file paths for each of the item types and collect references in each file
 itemTypeMap.forEach( ( itemType ) => {
-    let itemListForType = itemType.getItemList( projectFolder );
+    let itemListForType = itemType.fetchItemsFromFolder()
+    // let itemListForType = itemType.getItemList( projectFolder );
     if( itemListForType == null ) {
         return;
     }
 
-    // store list of files per each type
-    itemType.itemsList = itemListForType;
+    // // store list of files per each type
+    // itemType.itemsList = itemListForType;
 
     // check the contents of each item/file
-    itemType.itemsList.forEach( currentItem => {
+    itemListForType.forEach( currentItem => {
         if( ! currentItem ) {
             return;
         }
@@ -295,15 +359,25 @@ itemTypeMap.forEach( ( itemType ) => {
         }
 
         // identify the references the current item has to a LWC/Aura/VF and store in map
+        // if LWC flag was specified, it will attempt to find LWCs in the file and so forth
+        // for Flows, it will look for references in other flows and classes too
         if( ( lwcFlag && itemType.type === LWCType ) 
                 || ( auraFlag && itemType.type === AURAType ) 
-                || ( vfpageFlag && itemType.type === PAGEType ) ) {
+                || ( vfpageFlag && itemType.type === PAGEType ) 
+                || ( flowFlag && itemType.type === FLOWType ) ) {
 
             let anItemList = itemTypeMap.get( itemType.type ).itemsList;
             anItemList.forEach( anItem => {
                 if( ! anItem || anItem.uniqueName == currentItem.uniqueName
                         || ! itemText.includes( anItem.componentName ) ) {
                     return;
+                }
+
+                // detect and collect method calls in a set
+                let methodReferencesSet = currentItem.getReferenceSet( itemText, anItem.name );
+                if( methodReferencesSet.size > 0 ) {
+                    // add method to inner class record without duplicates
+                    anItem.methodReferencesSet.add( ...methodReferencesSet );
                 }
 
                 // increase referenced count
@@ -319,6 +393,32 @@ itemTypeMap.forEach( ( itemType ) => {
             } );
         }
 
+        // this would make class-flow dependencies visible but we need more to make classes visible only if they reference a flow
+        // // check if any classes reference flows
+        // if( ( flowFlag && itemType.type === CLASSType ) ) {
+        //     //console.log( `Checking for flow references in class ${currentItem.uniqueName}` );
+        //     let aFlowList = itemTypeMap.get( FLOWType ).fetchItemsFromFolder();
+        //     aFlowList.forEach( aFlow => {
+        //         //console.log( `Checking ${aFlow.uniqueName} in class ${currentItem.uniqueName}` );
+        //         if( ! aFlow || aFlow.uniqueName == currentItem.uniqueName
+        //                 || ! itemText.includes( aFlow.componentName ) ) {
+        //             return;
+        //         }
+        //         console.log( ` ${aFlow.uniqueName} is in class ${currentItem.uniqueName}` );
+
+        //         // increase referenced count
+        //         aFlow.referencedCount++;
+                
+        //         // store referenced class in xref map
+        //         crossReferenceMap.set( aFlow.name, aFlow );
+
+        //         // TODO:  store the interface of the item (public methods/attributes) and what sObjects it references
+
+        //         // add lwc to the references list of the outer item
+        //         currentItem.references.push( aFlow );
+        //     } );
+        // }
+
         // identify the references the current item has to a class and store in map
         let classItemList = itemTypeMap.get( CLASSType ).itemsList;
         classItemList.forEach( innerclass => {
@@ -333,9 +433,8 @@ itemTypeMap.forEach( ( itemType ) => {
             // if( methodReferencesSet.size == 0 ) {
             //     return;
             // }
-
-            // add method to inner class record without duplicates
             if( methodReferencesSet.size > 0 ) {
+                // add method to inner class record without duplicates
                 innerclass.methodReferencesSet.add( ...methodReferencesSet );
             }
 
@@ -384,6 +483,8 @@ sortedClassReferenceArray.forEach( anItem => {
         return;
     }
     if( flowFlag && anItem.itemType.type != FLOWType ) {
+        // this would show classes that reference flows but also classes that reference other classes
+        // && anItem.itemType.type != CLASSType ) {
         return;
     }
     if( vfpageFlag && anItem.itemType.type != PAGEType ) {
@@ -473,10 +574,8 @@ let theHeader = ( triggerFlag ? 'Triggers ' : '' )
 
 // build page with everything and script to adjust height of graph
 let graphHTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
-            </head><body><h2>${theHeader}</h2><div id="theGraph" class="mermaid">\ngraph LR\n
-            ${graphDefinition}
-            ${independentItemElement}
-            ${styleSheetList}
+            </head><body><h2>${theHeader}</h2><div id="theGraph" class="mermaid">\n
+            graph LR\n${graphDefinition}${independentItemElement}${styleSheetList}
             </div><script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
             <script>mermaid.initialize({startOnLoad:true,securityLevel:\'loose\'}); 
             setTimeout( () => { var theGraph = document.querySelector("#theGraph SVG"); 
