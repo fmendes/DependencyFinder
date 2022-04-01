@@ -28,6 +28,7 @@
 
     class ItemType {
         hasJS = false;
+        hasMultipleEntries = false;
         constructor( type, folder, extension, color ) {
             this.type = type;
             this.folder = folder;
@@ -160,7 +161,8 @@
             // clean up the references
             foundReferences = foundReferences.map( ( aReference ) => {
                 return aReference.replace( controllerRefExpression, 'controller' )
-                                        .replace( importRefExpression, 'imported' );
+                                        .replace( /';/g, '' )
+                                        .replace( /import .*? from '@salesforce\/apex\/.*?\./g, 'imported' );
             } );
             //console.log( `Found ${foundReferences.length} references to ${itemName}`, foundReferences );
             return foundReferences;
@@ -219,8 +221,31 @@
         // }
     }
     class WorkflowItemType extends FlowItemType {
+        hasMultipleEntries = true;
         // TODO:  reimplement getItemList() to retrieve each object's workflows and extract from them
         // the individual workflow items (rules, time-triggers, alerts, field updates, etc.)
+        getItemList = ( projectFolder ) => {
+            // collect items in folder
+            console.log( `Looking for /${this.folder} in folder:  ${projectFolder}` );
+            let path = `${projectFolder}/${this.folder}`;
+            let fileList = this.readDirIfItExists( path );
+            
+            fileList = fileList.filter( fileName => this.validateFileName( fileName ) );
+    
+            // create one item for the rule and each of the workflow action types
+            let itemList = [];
+            fileList.forEach( fileName => { 
+                let itemName = fileName.substring( 0, fileName.length - this.extension.length );
+                let filePath = `${path}/${fileName}`;
+                itemList.push( new ItemData( `${itemName} WF ALERT`, this, filePath ) );
+                itemList.push( new ItemData( `${itemName} WF OUTBOUND MSG`, this, filePath ) );
+                itemList.push( new ItemData( `${itemName} WF TASK`, this, filePath ) );
+                itemList.push( new ItemData( `${itemName} WF FIELD UPDATE`, this, filePath ) );
+                itemList.push( new ItemData( `${itemName} WF RULE`, this, filePath ) );
+            } );
+    
+            return itemList;
+        }
     }
 
     const CLASSType = 'CLASS', TRIGGERType = 'TRIGGER', AURAType = 'AURA', LWCType = 'LWC'
@@ -252,7 +277,7 @@
         }
         getItemTextFromFile = () => {
             // read file
-            let itemText = this.getFile();
+            let itemText = this.getFile( this.filePath );
             
             // JS items have an additional .js file
             let itemTextJS = '';
@@ -268,21 +293,42 @@
                 filePathJS = this.filePath.replace( this.itemType.extension, 'Helper.js' );
                 let itemTextHelperJS = this.getFile( filePathJS );
 
-                itemTextJS = itemTextJS
-                            + itemTextControllerJS
-                            + itemTextHelperJS;
+                return `${itemText}////\n${itemTextJS}////\n${itemTextControllerJS}////\n${itemTextHelperJS}`;
             }
-            return itemText
-                +'////\n'+ itemTextJS;
+
+            if( this.itemType.hasMultipleEntries ) {
+                let workflowType = this.name.substring( this.name.indexOf( ' ' ) + 1 );
+                let refExpression;
+                if( workflowType === 'WF ALERT' ) {
+                    refExpression = '<alerts>.*?</alerts>';
+                }
+                if( workflowType === 'WF OUTBOUND MSG' ) {
+                    refExpression = '<outboundMessages>.*?</outboundMessages>';
+                }
+                if( workflowType === 'WF TASK' ) {
+                    refExpression = '<tasks>.*?</tasks>';
+                }
+                if( workflowType === 'WF FIELD UPDATE' ) {
+                    refExpression = '<fieldUpdates>.*?</fieldUpdates>';
+                }
+                if( workflowType === 'WF RULE' ) {
+                    refExpression = '<rules>.*?</rules>';
+                }
+                let reMatchReferences = new RegExp( refExpression, 'gs' );
+                let foundControllerReference = itemText.match( reMatchReferences );
+                return ( foundControllerReference ? foundControllerReference.join() : '' );
+            }
+
+            return itemText;
         }
-        getFile = () => {
-            if( ! fs.existsSync( this.filePath ) ) {
+        getFile = ( aFilePath ) => {
+            if( ! fs.existsSync( aFilePath ) ) {
                 return '';
             }
             if( verboseFlag ) {
-                console.log( `Reading ${this.itemType.type}:  ${this.name} at ${this.filePath}` );
+                console.log( `Reading ${this.itemType.type}:  ${this.name} at ${aFilePath}` );
             }
-            return fs.readFileSync( this.filePath, 'utf8' );
+            return fs.readFileSync( aFilePath, 'utf8' );
         }
         getReferenceSet = ( theText, className ) => {
             let foundReferences = this.itemType.findReference( theText, className );
@@ -329,7 +375,8 @@ let lwcFlag = lowerCaseArgs.includes( '--lwc' );
 let auraFlag = lowerCaseArgs.includes( '--aura' );
 let flowFlag = lowerCaseArgs.includes( '--flow' );
 let vfpageFlag = lowerCaseArgs.includes( '--visualforce' ) || lowerCaseArgs.includes( '--vf' );
-let classFlag = !triggerFlag && !lwcFlag && !auraFlag && !flowFlag && !vfpageFlag;
+let workflowFlag = lowerCaseArgs.includes( '--workflow' );
+let classFlag = !triggerFlag && !lwcFlag && !auraFlag && !flowFlag && !vfpageFlag && !workflowFlag;
 
 let verboseFlag = myArgs.includes( '--verbose' );
 
@@ -364,7 +411,8 @@ itemTypeMap.forEach( ( itemType ) => {
         if( ( lwcFlag && itemType.type === LWCType ) 
                 || ( auraFlag && itemType.type === AURAType ) 
                 || ( vfpageFlag && itemType.type === PAGEType ) 
-                || ( flowFlag && itemType.type === FLOWType ) ) {
+                || ( flowFlag && itemType.type === FLOWType )
+                || ( workflowFlag && itemType.type === WORKFLOWType ) ) {
 
             let anItemList = itemTypeMap.get( itemType.type ).itemsList;
             anItemList.forEach( anItem => {
@@ -390,6 +438,37 @@ itemTypeMap.forEach( ( itemType ) => {
 
                 // add lwc to the references list of the outer item
                 currentItem.references.push( anItem );
+            } );
+        }
+
+        if( ( workflowFlag && itemType.type === WORKFLOWType ) ) {
+            let anItemList = itemTypeMap.get( itemType.type ).itemsList;
+            anItemList.forEach( anItem => {
+                if( ! anItem || anItem.uniqueName == currentItem.uniqueName ) {
+                    return;
+                }
+
+                // itemText will be an array for workflow items
+                console.log( 'itemText', itemText );
+                if( ! Array.isArray( itemText ) ) {
+                    itemText = [ itemText ];
+                }
+                itemText.forEach( aText => {
+                    if( ! aText.includes( anItem.componentName ) ) {
+                        return;
+                    }
+
+                    // increase referenced count
+                    anItem.referencedCount++;
+                    
+                    // store referenced class in xref map
+                    crossReferenceMap.set( anItem.name, anItem );
+    
+                    // TODO:  store the interface of the item (public methods/attributes) and what sObjects it references
+    
+                    // add lwc to the references list of the outer item
+                    currentItem.references.push( anItem );
+                } );
             } );
         }
 
@@ -488,6 +567,9 @@ sortedClassReferenceArray.forEach( anItem => {
         return;
     }
     if( vfpageFlag && anItem.itemType.type != PAGEType ) {
+        return;
+    }
+    if( workflowFlag && anItem.itemType.type != WORKFLOWType ) {
         return;
     }
 
