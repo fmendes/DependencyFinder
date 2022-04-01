@@ -220,33 +220,6 @@
         //     return foundFlowReference;
         // }
     }
-    class WorkflowItemType extends FlowItemType {
-        hasMultipleEntries = true;
-        // TODO:  reimplement getItemList() to retrieve each object's workflows and extract from them
-        // the individual workflow items (rules, time-triggers, alerts, field updates, etc.)
-        getItemList = ( projectFolder ) => {
-            // collect items in folder
-            console.log( `Looking for /${this.folder} in folder:  ${projectFolder}` );
-            let path = `${projectFolder}/${this.folder}`;
-            let fileList = this.readDirIfItExists( path );
-            
-            fileList = fileList.filter( fileName => this.validateFileName( fileName ) );
-    
-            // create one item for the rule and each of the workflow action types
-            let itemList = [];
-            fileList.forEach( fileName => { 
-                let itemName = fileName.substring( 0, fileName.length - this.extension.length );
-                let filePath = `${path}/${fileName}`;
-                itemList.push( new ItemData( `${itemName} WF ALERT`, this, filePath ) );
-                itemList.push( new ItemData( `${itemName} WF OUTBOUND MSG`, this, filePath ) );
-                itemList.push( new ItemData( `${itemName} WF TASK`, this, filePath ) );
-                itemList.push( new ItemData( `${itemName} WF FIELD UPDATE`, this, filePath ) );
-                itemList.push( new ItemData( `${itemName} WF RULE`, this, filePath ) );
-            } );
-    
-            return itemList;
-        }
-    }
 
     const CLASSType = 'CLASS', TRIGGERType = 'TRIGGER', AURAType = 'AURA', LWCType = 'LWC'
         , FLOWType = 'FLOW', WORKFLOWType = 'WORKFLOW', PAGEType = 'VISUALFORCE'; // PROCESSBUILDERType = 'PBFLOW?'
@@ -257,7 +230,7 @@
     itemTypeMap.set( LWCType, new JSItemType( LWCType, 'lwc', '.html', 'lightgreen' ) );
     itemTypeMap.set( PAGEType, new VFItemType( PAGEType, 'pages', '.page', 'plum' ) );
     itemTypeMap.set( FLOWType, new FlowItemType( FLOWType, 'flows', '.flow-meta.xml', 'pink' ) );
-    itemTypeMap.set( WORKFLOWType, new WorkflowItemType( WORKFLOWType, 'workflows', '.workflow-meta.xml', 'gray' ) );
+    //itemTypeMap.set( WORKFLOWType, new WorkflowItemType( WORKFLOWType, 'workflows', '.workflow-meta.xml', 'gray' ) );
 
     class ItemData {
         constructor( aName, anItemType, filePath ) {
@@ -294,29 +267,6 @@
                 let itemTextHelperJS = this.getFile( filePathJS );
 
                 return `${itemText}////\n${itemTextJS}////\n${itemTextControllerJS}////\n${itemTextHelperJS}`;
-            }
-
-            if( this.itemType.hasMultipleEntries ) {
-                let workflowType = this.name.substring( this.name.indexOf( ' ' ) + 1 );
-                let refExpression;
-                if( workflowType === 'WF ALERT' ) {
-                    refExpression = '<alerts>.*?</alerts>';
-                }
-                if( workflowType === 'WF OUTBOUND MSG' ) {
-                    refExpression = '<outboundMessages>.*?</outboundMessages>';
-                }
-                if( workflowType === 'WF TASK' ) {
-                    refExpression = '<tasks>.*?</tasks>';
-                }
-                if( workflowType === 'WF FIELD UPDATE' ) {
-                    refExpression = '<fieldUpdates>.*?</fieldUpdates>';
-                }
-                if( workflowType === 'WF RULE' ) {
-                    refExpression = '<rules>.*?</rules>';
-                }
-                let reMatchReferences = new RegExp( refExpression, 'gs' );
-                let foundControllerReference = itemText.match( reMatchReferences );
-                return ( foundControllerReference ? foundControllerReference.join() : '' );
             }
 
             return itemText;
@@ -441,36 +391,8 @@ itemTypeMap.forEach( ( itemType ) => {
             } );
         }
 
-        if( ( workflowFlag && itemType.type === WORKFLOWType ) ) {
-            let anItemList = itemTypeMap.get( itemType.type ).itemsList;
-            anItemList.forEach( anItem => {
-                if( ! anItem || anItem.uniqueName == currentItem.uniqueName ) {
-                    return;
-                }
-
-                // itemText will be an array for workflow items
-                console.log( 'itemText', itemText );
-                if( ! Array.isArray( itemText ) ) {
-                    itemText = [ itemText ];
-                }
-                itemText.forEach( aText => {
-                    if( ! aText.includes( anItem.componentName ) ) {
-                        return;
-                    }
-
-                    // increase referenced count
-                    anItem.referencedCount++;
-                    
-                    // store referenced class in xref map
-                    crossReferenceMap.set( anItem.name, anItem );
-    
-                    // TODO:  store the interface of the item (public methods/attributes) and what sObjects it references
-    
-                    // add lwc to the references list of the outer item
-                    currentItem.references.push( anItem );
-                } );
-            } );
-        }
+        // if( ( workflowFlag && itemType.type === WORKFLOWType ) ) {
+        // }
 
         // this would make class-flow dependencies visible but we need more to make classes visible only if they reference a flow
         // // check if any classes reference flows
